@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: transaction_tracking_db
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: transaction_tracking
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d transaction_tracking"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: transaction_tracking_app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://user:password@db:5432/transaction_tracking
+      PROJECT_NAME: Transaction Tracking API
+      VERSION: 0.1.0
+      DEBUG: "True"
+      ALLOWED_ORIGINS: http://localhost:3000,http://localhost:8000
+      LOG_MAX_FILES: "5"
+      LOG_MAX_SIZE_MB: "5"
+      LOG_EXCLUDED_PATHS: /health,/docs,/redoc,/openapi.json
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:
