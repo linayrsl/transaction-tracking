@@ -187,6 +187,20 @@ async def test_create_transaction_handles_decimal_precision(
     assert transaction.amount == 999900
 
 
+@pytest.mark.asyncio
+async def test_create_transaction_unsupported_currency(
+    client: AsyncClient, auth_token: str
+):
+    """Test that unsupported currency code is rejected."""
+    response = await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "XYZ"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    assert response.status_code == 422
+    assert "Currency code not supported" in response.json()["detail"][0]["msg"]
+
+
 # Test GET /transactions
 @pytest.mark.asyncio
 async def test_list_transactions_empty(client: AsyncClient, auth_token: str):
@@ -843,11 +857,10 @@ async def test_convert_transaction_precision(client: AsyncClient, auth_token: st
 
 
 @pytest.mark.asyncio
-@respx.mock
 async def test_convert_transaction_unsupported_currency(
     client: AsyncClient, auth_token: str
 ):
-    """Test API error for unsupported currency code."""
+    """Test that unsupported currency code is rejected."""
     # Create transaction
     create_response = await client.post(
         "/transactions/",
@@ -856,28 +869,14 @@ async def test_convert_transaction_unsupported_currency(
     )
     transaction_id = create_response.json()["id"]
 
-    # Mock API unsupported currency error
-    from app.config import settings
-    respx.get(
-        f"https://v6.exchangerate-api.com/v6/{settings.EXCHANGE_RATE_API_KEY}/pair/USD/XXX/100.0"
-    ).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "result": "error",
-                "error-type": "unsupported-code",
-            },
-        )
-    )
-
-    # Convert
+    # Try to convert to unsupported currency (no API mock needed)
     response = await client.get(
-        f"/convert/{transaction_id}/XXX",
+        f"/convert/{transaction_id}/ABC",  # Invalid currency
         headers={"Authorization": f"Bearer {auth_token}"},
     )
 
-    assert response.status_code == 503
-    assert "Currency conversion failed" in response.json()["detail"]
+    assert response.status_code == 422
+    assert "Currency code not supported" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -915,3 +914,25 @@ async def test_convert_transaction_large_amount(client: AsyncClient, auth_token:
 
     assert response.status_code == 200
     assert response.json()["amount"] == 850000.0
+
+
+@pytest.mark.asyncio
+async def test_convert_transaction_unsupported_target_currency(
+    client: AsyncClient, auth_token: str
+):
+    """Test that unsupported target currency is rejected."""
+    # Create a valid USD transaction
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    transaction_id = create_response.json()["id"]
+
+    # Try to convert to unsupported currency
+    response = await client.get(
+        f"/convert/{transaction_id}/XYZ",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    assert response.status_code == 422
+    assert "Currency code not supported" in response.json()["detail"]

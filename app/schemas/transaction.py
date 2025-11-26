@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, field_validator, field_serializer
 
+from app.core.constants import SUPPORTED_CURRENCIES
+
 
 class TransactionCreate(BaseModel):
     """Schema for creating a transaction."""
@@ -21,10 +23,17 @@ class TransactionCreate(BaseModel):
 
     @field_validator("currency")
     def validate_currency(cls, v):
-        """Validate currency is 3-letter uppercase code."""
+        """Validate currency is supported 3-letter code."""
         v = v.upper()  # Enforce uppercase
+
+        # Validate format
         if not re.match(r"^[A-Z]{3}$", v):
             raise ValueError("Currency must be a 3-letter code")
+
+        # Validate against whitelist
+        if v not in SUPPORTED_CURRENCIES:
+            raise ValueError("Currency code not supported")
+
         return v
 
 

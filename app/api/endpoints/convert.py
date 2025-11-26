@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import SUPPORTED_CURRENCIES
 from app.core.dependencies import get_current_user
 from app.core.logging import app_logger
 from app.database import get_db
@@ -37,6 +38,13 @@ async def convert_transaction(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Currency must be a 3-letter code"
+        )
+
+    # Validate currency is supported
+    if target_currency not in SUPPORTED_CURRENCIES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Currency code not supported"
         )
 
     # Fetch transaction (must belong to current user)
