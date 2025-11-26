@@ -1,4 +1,6 @@
 import pytest
+import httpx
+import respx
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -98,13 +100,13 @@ async def test_create_transaction_success(
     assert "id" in data
     assert "created_at" in data
 
-    # Verify in database (stored as cents)
+    # Verify in database (stored as micro cents)
     result = await db_session.execute(
         select(Transaction).where(Transaction.id == data["id"])
     )
     transaction = result.scalar_one_or_none()
     assert transaction is not None
-    assert transaction.amount == 1234  # Stored as cents
+    assert transaction.amount == 123400  # Stored as micro cents
 
 
 @pytest.mark.asyncio
@@ -177,12 +179,12 @@ async def test_create_transaction_handles_decimal_precision(
     data = response.json()
     assert data["amount"] == 99.99
 
-    # Verify stored as 9999 cents
+    # Verify stored as 999900 micro cents
     result = await db_session.execute(
         select(Transaction).where(Transaction.id == data["id"])
     )
     transaction = result.scalar_one()
-    assert transaction.amount == 9999
+    assert transaction.amount == 999900
 
 
 # Test GET /transactions
@@ -527,3 +529,389 @@ async def test_summary_handles_decimal_precision(
     assert len(data) == 1
     assert data[0]["currency"] == "USD"
     assert data[0]["total"] == 40.00
+
+
+# Test GET /convert/{transaction_id}/{target_currency}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_convert_transaction_success(client: AsyncClient, auth_token: str):
+    """Test successful currency conversion."""
+    # Create a USD transaction
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    transaction_id = create_response.json()["id"]
+    original_created_at = create_response.json()["created_at"]
+
+    # Mock currency conversion API
+    from app.config import settings
+    respx.get(
+        f"https://v6.exchangerate-api.com/v6/{settings.EXCHANGE_RATE_API_KEY}/pair/USD/EUR/100.0"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": "success",
+                "conversion_rate": 0.85,
+                "conversion_result": 85.0,
+            },
+        )
+    )
+
+    # Convert to EUR
+    response = await client.get(
+        f"/convert/{transaction_id}/EUR",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == transaction_id
+    assert data["amount"] == 85.0
+    assert data["currency"] == "EUR"
+    assert data["created_at"] == original_created_at
+
+
+@pytest.mark.asyncio
+async def test_convert_transaction_same_currency(client: AsyncClient, auth_token: str):
+    """Test that same currency returns original without API call."""
+    # Create transaction
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 50.00, "currency": "GBP"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    transaction_id = create_response.json()["id"]
+
+    # Convert to same currency (no mock needed - shouldn't be called)
+    response = await client.get(
+        f"/convert/{transaction_id}/GBP",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["amount"] == 50.00
+    assert data["currency"] == "GBP"
+
+
+@pytest.mark.asyncio
+async def test_convert_transaction_not_found(client: AsyncClient, auth_token: str):
+    """Test 404 for non-existent transaction."""
+    response = await client.get(
+        "/convert/99999/EUR",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Transaction not found"
+
+
+@pytest.mark.asyncio
+async def test_convert_transaction_wrong_user(client: AsyncClient):
+    """Test that users cannot convert other users' transactions."""
+    # Register two users
+    await client.post(
+        "/register", json={"email": "user1@example.com", "password": "Pass123!"}
+    )
+    await client.post(
+        "/register", json={"email": "user2@example.com", "password": "Pass123!"}
+    )
+
+    # Get tokens
+    token1 = (
+        await client.post(
+            "/login", json={"email": "user1@example.com", "password": "Pass123!"}
+        )
+    ).json()["access_token"]
+
+    token2 = (
+        await client.post(
+            "/login", json={"email": "user2@example.com", "password": "Pass123!"}
+        )
+    ).json()["access_token"]
+
+    # User1 creates transaction
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {token1}"},
+    )
+    transaction_id = create_response.json()["id"]
+
+    # User2 tries to convert user1's transaction
+    response = await client.get(
+        f"/convert/{transaction_id}/EUR",
+        headers={"Authorization": f"Bearer {token2}"},
+    )
+
+    # Should get 404 (not 403) to avoid leaking transaction existence
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Transaction not found"
+
+
+@pytest.mark.asyncio
+async def test_convert_transaction_invalid_currency_format(
+    client: AsyncClient, auth_token: str
+):
+    """Test validation of target currency format."""
+    # Create transaction
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    transaction_id = create_response.json()["id"]
+
+    # Test invalid formats
+    invalid_currencies = ["US", "USDD", "123", "us$"]
+
+    for currency in invalid_currencies:
+        response = await client.get(
+            f"/convert/{transaction_id}/{currency}",
+            headers={"Authorization": f"Bearer {auth_token}"},
+        )
+        assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_convert_transaction_lowercase_currency(
+    client: AsyncClient, auth_token: str
+):
+    """Test that lowercase currency is converted to uppercase."""
+    # Create transaction
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    transaction_id = create_response.json()["id"]
+
+    # Mock API (should be called with uppercase)
+    from app.config import settings
+    respx.get(
+        f"https://v6.exchangerate-api.com/v6/{settings.EXCHANGE_RATE_API_KEY}/pair/USD/EUR/100.0"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": "success",
+                "conversion_rate": 0.85,
+                "conversion_result": 85.0,
+            },
+        )
+    )
+
+    # Call with lowercase
+    response = await client.get(
+        f"/convert/{transaction_id}/eur",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["currency"] == "EUR"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_convert_transaction_api_failure(client: AsyncClient, auth_token: str):
+    """Test 503 when currency conversion API fails."""
+    # Create transaction
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    transaction_id = create_response.json()["id"]
+
+    # Mock API error
+    from app.config import settings
+    respx.get(
+        f"https://v6.exchangerate-api.com/v6/{settings.EXCHANGE_RATE_API_KEY}/pair/USD/EUR/100.0"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": "error",
+                "error-type": "quota-reached",
+            },
+        )
+    )
+
+    # Convert should fail
+    response = await client.get(
+        f"/convert/{transaction_id}/EUR",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+
+    assert response.status_code == 503
+    assert "Currency conversion failed" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_convert_transaction_requires_auth(client: AsyncClient):
+    """Test that conversion requires authentication."""
+    response = await client.get("/convert/1/EUR")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_convert_transaction_preserves_metadata(
+    client: AsyncClient, auth_token: str
+):
+    """Test that conversion preserves original transaction metadata."""
+    # Create transaction
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    original = create_response.json()
+
+    # Mock conversion
+    from app.config import settings
+    respx.get(
+        f"https://v6.exchangerate-api.com/v6/{settings.EXCHANGE_RATE_API_KEY}/pair/USD/EUR/100.0"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": "success",
+                "conversion_rate": 0.85,
+                "conversion_result": 85.0,
+            },
+        )
+    )
+
+    # Convert
+    response = await client.get(
+        f"/convert/{original['id']}/EUR",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+
+    data = response.json()
+    # Metadata should match original
+    assert data["id"] == original["id"]
+    assert data["created_at"] == original["created_at"]
+    # Only amount and currency should change
+    assert data["amount"] != original["amount"]
+    assert data["currency"] != original["currency"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_convert_transaction_precision(client: AsyncClient, auth_token: str):
+    """Test that conversion preserves precision correctly."""
+    # Create transaction with precise amount
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 12.34, "currency": "USD"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    transaction_id = create_response.json()["id"]
+
+    # Mock conversion with precise result
+    from app.config import settings
+    respx.get(
+        f"https://v6.exchangerate-api.com/v6/{settings.EXCHANGE_RATE_API_KEY}/pair/USD/GBP/12.34"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": "success",
+                "conversion_rate": 0.79,
+                "conversion_result": 9.7486,
+            },
+        )
+    )
+
+    # Convert
+    response = await client.get(
+        f"/convert/{transaction_id}/GBP",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+
+    assert response.status_code == 200
+    # Should handle precision correctly
+    assert response.json()["amount"] == 9.7486
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_convert_transaction_unsupported_currency(
+    client: AsyncClient, auth_token: str
+):
+    """Test API error for unsupported currency code."""
+    # Create transaction
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    transaction_id = create_response.json()["id"]
+
+    # Mock API unsupported currency error
+    from app.config import settings
+    respx.get(
+        f"https://v6.exchangerate-api.com/v6/{settings.EXCHANGE_RATE_API_KEY}/pair/USD/XXX/100.0"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": "error",
+                "error-type": "unsupported-code",
+            },
+        )
+    )
+
+    # Convert
+    response = await client.get(
+        f"/convert/{transaction_id}/XXX",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+
+    assert response.status_code == 503
+    assert "Currency conversion failed" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_convert_transaction_large_amount(client: AsyncClient, auth_token: str):
+    """Test conversion of large amounts."""
+    # Create transaction with large amount
+    create_response = await client.post(
+        "/transactions/",
+        json={"amount": 1000000.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    transaction_id = create_response.json()["id"]
+
+    # Mock conversion
+    from app.config import settings
+    respx.get(
+        f"https://v6.exchangerate-api.com/v6/{settings.EXCHANGE_RATE_API_KEY}/pair/USD/EUR/1000000.0"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": "success",
+                "conversion_rate": 0.85,
+                "conversion_result": 850000.0,
+            },
+        )
+    )
+
+    # Convert
+    response = await client.get(
+        f"/convert/{transaction_id}/EUR",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["amount"] == 850000.0

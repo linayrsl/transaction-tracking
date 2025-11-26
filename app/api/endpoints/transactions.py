@@ -30,13 +30,13 @@ async def create_transaction(
     - **amount**: Transaction amount (float with 2 decimal places)
     - **currency**: 3-letter currency code (e.g., USD, EUR, GBP)
     """
-    # Convert amount from float to cents (integer)
-    amount_cents = int(transaction_data.amount * 100)
+    # Convert amount from float to micro cents (integer)
+    amount_micro_cents = int(transaction_data.amount * 10000)
 
     # Create transaction
     new_transaction = Transaction(
         user_id=current_user.id,
-        amount=amount_cents,
+        amount=amount_micro_cents,
         currency=transaction_data.currency,
     )
 
@@ -120,11 +120,11 @@ async def get_transaction_summary(
     result = await db.execute(query)
     rows = result.all()
 
-    # Convert from cents to dollars and build response
+    # Convert from micro cents to dollars and build response
     summary = [
         CurrencySummary(
             currency=row.currency,
-            total=float(row.total_amount) / 100.0
+            total=float(row.total_amount) / 10000.0
         )
         for row in rows
     ]

@@ -12,7 +12,7 @@ class TransactionCreate(BaseModel):
 
     @field_validator("amount")
     def validate_amount(cls, v):
-        """Validate amount has max 2 decimal places and convert to cents."""
+        """Validate amount has max 2 decimal places."""
         if v <= 0:
             raise ValueError("Amount must be positive")
         # Round to 2 decimal places to handle floating point precision
@@ -40,8 +40,8 @@ class TransactionResponse(BaseModel):
 
     @field_serializer("amount")
     def serialize_amount(self, amount: int) -> float:
-        """Convert amount from cents (integer) to float."""
-        return amount / 100.0
+        """Convert amount from micro cents (integer) to float."""
+        return amount / 10000.0
 
 
 class TransactionListResponse(BaseModel):

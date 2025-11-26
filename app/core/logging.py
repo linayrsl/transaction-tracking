@@ -52,5 +52,37 @@ def setup_logger() -> logging.Logger:
     return logger
 
 
-# Create global logger instance
+def setup_app_logger() -> logging.Logger:
+    """
+    Set up a logger for application errors that outputs to stdout.
+
+    Separate from api_logger which logs requests to rotating files.
+
+    Returns:
+        logging.Logger: Configured logger instance
+    """
+    logger = logging.getLogger("app_errors")
+    logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper()))
+
+    # Prevent duplicate handlers if logger already exists
+    if logger.handlers:
+        return logger
+
+    # Create stdout handler
+    console_handler = logging.StreamHandler()
+
+    # Create formatter
+    formatter = logging.Formatter(
+        fmt="[%(asctime)s] [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    return logger
+
+
+# Create global logger instances
 api_logger = setup_logger()
+app_logger = setup_app_logger()

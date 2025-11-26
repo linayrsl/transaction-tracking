@@ -10,7 +10,7 @@ class Transaction(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    amount = Column(BigInteger, nullable=False)  # Stored as cents (big integer for large amounts)
+    amount = Column(BigInteger, nullable=False)  # Stored as micro cents (big integer for large amounts)
     currency = Column(String(3), nullable=False)  # 3-letter uppercase code
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
