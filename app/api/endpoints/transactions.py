@@ -10,6 +10,7 @@ from app.schemas.transaction import (
     TransactionCreate,
     TransactionListResponse,
     TransactionResponse,
+    CurrencySummary,
 )
 
 router = APIRouter()
@@ -92,3 +93,40 @@ async def list_transactions(
         per_page=per_page,
         total_pages=total_pages,
     )
+
+
+@router.get("/summary/", response_model=list[CurrencySummary])
+async def get_transaction_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get aggregated transaction totals by currency for authenticated user.
+
+    Returns a list of currency summaries ordered alphabetically by currency code.
+    Returns empty array if user has no transactions.
+    """
+    # Query: GROUP BY currency, SUM amounts, ORDER BY currency
+    query = (
+        select(
+            Transaction.currency,
+            func.sum(Transaction.amount).label("total_amount"),
+        )
+        .where(Transaction.user_id == current_user.id)
+        .group_by(Transaction.currency)
+        .order_by(Transaction.currency)
+    )
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    # Convert from cents to dollars and build response
+    summary = [
+        CurrencySummary(
+            currency=row.currency,
+            total=float(row.total_amount) / 100.0
+        )
+        for row in rows
+    ]
+
+    return summary

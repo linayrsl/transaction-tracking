@@ -52,3 +52,10 @@ class TransactionListResponse(BaseModel):
     page: int
     per_page: int
     total_pages: int
+
+
+class CurrencySummary(BaseModel):
+    """Summary of transactions for a single currency."""
+
+    currency: str
+    total: float

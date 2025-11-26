@@ -339,3 +339,191 @@ async def test_list_transactions_data_isolation(client: AsyncClient):
     data2 = response2.json()
     assert data2["total"] == 1
     assert data2["items"][0]["currency"] == "GBP"
+
+
+# Test GET /transactions/summary/
+
+
+@pytest.mark.asyncio
+async def test_summary_empty(client: AsyncClient, auth_token: str):
+    """Test summary returns empty array when user has no transactions."""
+    response = await client.get(
+        "/transactions/summary/",
+        headers={"Authorization": f"Bearer {auth_token}"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data == []
+
+
+@pytest.mark.asyncio
+async def test_summary_single_currency(client: AsyncClient, auth_token: str):
+    """Test summary with transactions in single currency."""
+    # Create 3 USD transactions
+    amounts = [10.50, 25.75, 14.25]
+    for amount in amounts:
+        await client.post(
+            "/transactions/",
+            json={"amount": amount, "currency": "USD"},
+            headers={"Authorization": f"Bearer {auth_token}"}
+        )
+
+    response = await client.get(
+        "/transactions/summary/",
+        headers={"Authorization": f"Bearer {auth_token}"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["currency"] == "USD"
+    assert data[0]["total"] == 50.50  # 10.50 + 25.75 + 14.25
+
+
+@pytest.mark.asyncio
+async def test_summary_multiple_currencies(client: AsyncClient, auth_token: str):
+    """Test summary aggregates correctly across multiple currencies."""
+    # Create transactions in different currencies
+    transactions = [
+        (100.00, "USD"),
+        (50.50, "USD"),
+        (75.25, "EUR"),
+        (25.00, "EUR"),
+        (200.00, "GBP"),
+    ]
+
+    for amount, currency in transactions:
+        await client.post(
+            "/transactions/",
+            json={"amount": amount, "currency": currency},
+            headers={"Authorization": f"Bearer {auth_token}"}
+        )
+
+    response = await client.get(
+        "/transactions/summary/",
+        headers={"Authorization": f"Bearer {auth_token}"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Verify correct aggregation
+    assert len(data) == 3
+
+    # Verify alphabetical ordering (EUR, GBP, USD)
+    assert data[0]["currency"] == "EUR"
+    assert data[0]["total"] == 100.25  # 75.25 + 25.00
+
+    assert data[1]["currency"] == "GBP"
+    assert data[1]["total"] == 200.00
+
+    assert data[2]["currency"] == "USD"
+    assert data[2]["total"] == 150.50  # 100.00 + 50.50
+
+
+@pytest.mark.asyncio
+async def test_summary_requires_auth(client: AsyncClient):
+    """Test that summary endpoint requires authentication."""
+    response = await client.get("/transactions/summary/")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_summary_data_isolation(client: AsyncClient):
+    """Test that summary only includes current user's transactions."""
+    # Register two users
+    await client.post(
+        "/register", json={"email": "user1@example.com", "password": "Pass123!"}
+    )
+    await client.post(
+        "/register", json={"email": "user2@example.com", "password": "Pass123!"}
+    )
+
+    # Get tokens
+    token1 = (
+        await client.post(
+            "/login", json={"email": "user1@example.com", "password": "Pass123!"}
+        )
+    ).json()["access_token"]
+
+    token2 = (
+        await client.post(
+            "/login", json={"email": "user2@example.com", "password": "Pass123!"}
+        )
+    ).json()["access_token"]
+
+    # User1 creates USD and EUR transactions
+    await client.post(
+        "/transactions/",
+        json={"amount": 100.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {token1}"}
+    )
+    await client.post(
+        "/transactions/",
+        json={"amount": 50.00, "currency": "EUR"},
+        headers={"Authorization": f"Bearer {token1}"}
+    )
+
+    # User2 creates USD and GBP transactions
+    await client.post(
+        "/transactions/",
+        json={"amount": 200.00, "currency": "USD"},
+        headers={"Authorization": f"Bearer {token2}"}
+    )
+    await client.post(
+        "/transactions/",
+        json={"amount": 75.00, "currency": "GBP"},
+        headers={"Authorization": f"Bearer {token2}"}
+    )
+
+    # User1 should see only their summary
+    response1 = await client.get(
+        "/transactions/summary/",
+        headers={"Authorization": f"Bearer {token1}"}
+    )
+    data1 = response1.json()
+    assert len(data1) == 2
+    assert data1[0]["currency"] == "EUR"
+    assert data1[0]["total"] == 50.00
+    assert data1[1]["currency"] == "USD"
+    assert data1[1]["total"] == 100.00
+
+    # User2 should see only their summary
+    response2 = await client.get(
+        "/transactions/summary/",
+        headers={"Authorization": f"Bearer {token2}"}
+    )
+    data2 = response2.json()
+    assert len(data2) == 2
+    assert data2[0]["currency"] == "GBP"
+    assert data2[0]["total"] == 75.00
+    assert data2[1]["currency"] == "USD"
+    assert data2[1]["total"] == 200.00
+
+
+@pytest.mark.asyncio
+async def test_summary_handles_decimal_precision(
+    client: AsyncClient, auth_token: str
+):
+    """Test that summary correctly aggregates amounts with decimal precision."""
+    # Create transactions with various decimal amounts
+    amounts = [10.99, 20.01, 5.50, 3.50]  # Should sum to 40.00
+
+    for amount in amounts:
+        await client.post(
+            "/transactions/",
+            json={"amount": amount, "currency": "USD"},
+            headers={"Authorization": f"Bearer {auth_token}"}
+        )
+
+    response = await client.get(
+        "/transactions/summary/",
+        headers={"Authorization": f"Bearer {auth_token}"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["currency"] == "USD"
+    assert data[0]["total"] == 40.00
