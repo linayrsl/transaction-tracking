@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.endpoints import auth
+from app.api.endpoints import auth, transactions
 from app.config import settings
 from app.core.middleware import RequestLoggingMiddleware, UserInjectionMiddleware
 
@@ -28,6 +28,9 @@ app.add_middleware(RequestLoggingMiddleware)
 
 # Include auth router at root level (no prefix)
 app.include_router(auth.router, tags=["auth"])
+
+# Include transactions router with /transactions prefix
+app.include_router(transactions.router, prefix="/transactions", tags=["transactions"])
 
 
 @app.get("/")
