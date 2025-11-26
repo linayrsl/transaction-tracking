@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_MINUTES: int = 10080  # 7 days
 
+    # Exchange Rate API configuration
+    EXCHANGE_RATE_API_KEY: str  # Required, get from exchangerate-api.com
+    EXCHANGE_RATE_API_TIMEOUT_SECONDS: int = 10
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
