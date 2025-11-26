@@ -1,84 +1,11 @@
 import pytest
 import httpx
 import respx
-from httpx import AsyncClient, ASGITransport
+from httpx import AsyncClient
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.core import middleware as middleware_module
-from app.database import get_db
-from app.main import app
 from app.models.transaction import Transaction
-from app.models.user import User
-
-# Test database setup (same pattern as test_auth.py)
-TEST_DATABASE_URL = settings.DATABASE_URL
-test_engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
-TestSessionLocal = async_sessionmaker(
-    test_engine, class_=AsyncSession, expire_on_commit=False
-)
-
-
-async def override_get_db():
-    async with TestSessionLocal() as session:
-        yield session
-
-
-# Override get_db dependency and middleware's AsyncSessionLocal
-app.dependency_overrides[get_db] = override_get_db
-middleware_module.AsyncSessionLocal = TestSessionLocal
-
-
-@pytest.fixture(scope="function", autouse=True)
-async def cleanup_database():
-    """Clean tables after each test."""
-    yield
-    async with TestSessionLocal() as session:
-        async with session.begin():
-            await session.execute(Transaction.__table__.delete())
-            await session.execute(User.__table__.delete())
-
-
-@pytest.fixture
-async def client():
-    """Create test client."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-
-
-@pytest.fixture
-async def db_session():
-    """Get database session for direct DB access."""
-    async with TestSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
-
-
-@pytest.fixture
-async def registered_user(client: AsyncClient):
-    """Register a user and return credentials."""
-    email = "test@example.com"
-    password = "TestPass123!"
-    await client.post("/register", json={"email": email, "password": password})
-    return {"email": email, "password": password}
-
-
-@pytest.fixture
-async def auth_token(client: AsyncClient, registered_user):
-    """Get auth token for registered user."""
-    response = await client.post(
-        "/login",
-        json={
-            "email": registered_user["email"],
-            "password": registered_user["password"],
-        },
-    )
-    return response.json()["access_token"]
 
 
 # Test POST /transactions

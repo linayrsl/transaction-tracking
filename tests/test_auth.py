@@ -1,65 +1,9 @@
 import pytest
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.pool import NullPool
 
-from app.main import app
-from app.core import middleware as middleware_module
-from app.database import Base, get_db
 from app.models.user import User
-from app.models.transaction import Transaction
-from app.config import settings
-
-# Test database URL (same as main database for now)
-TEST_DATABASE_URL = settings.DATABASE_URL
-
-# Create test engine and session with poolclass=NullPool to avoid connection issues
-test_engine = create_async_engine(
-    TEST_DATABASE_URL, echo=False, poolclass=NullPool
-)
-TestSessionLocal = async_sessionmaker(
-    test_engine, class_=AsyncSession, expire_on_commit=False
-)
-
-
-async def override_get_db():
-    async with TestSessionLocal() as session:
-        yield session
-
-
-# Override get_db dependency and middleware's AsyncSessionLocal
-app.dependency_overrides[get_db] = override_get_db
-middleware_module.AsyncSessionLocal = TestSessionLocal
-
-
-@pytest.fixture(scope="function", autouse=True)
-async def cleanup_database():
-    """Clean tables after each test."""
-    yield
-    # Clean after test (delete transactions first due to FK constraint)
-    async with TestSessionLocal() as session:
-        async with session.begin():
-            await session.execute(Transaction.__table__.delete())
-            await session.execute(User.__table__.delete())
-
-
-@pytest.fixture
-async def client():
-    """Create test client."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-
-
-@pytest.fixture
-async def db_session():
-    """Get database session for direct DB access."""
-    async with TestSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
 
 
 # Test data
