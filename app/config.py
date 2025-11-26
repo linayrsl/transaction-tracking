@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     ]
     LOG_LEVEL: str = "INFO"
 
+    # JWT Authentication configuration
+    JWT_SECRET_KEY: str  # Required, generate with: openssl rand -hex 32
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRY_MINUTES: int = 10080  # 7 days
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import api_router
+from app.api.endpoints import auth
 from app.config import settings
-from app.core.middleware import RequestLoggingMiddleware
+from app.core.middleware import RequestLoggingMiddleware, UserInjectionMiddleware
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -20,11 +20,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Add request logging middleware
+# Add user injection middleware (runs second - parses JWT and injects user)
+app.add_middleware(UserInjectionMiddleware)
+
+# Add request logging middleware (runs third - uses injected user for logging)
 app.add_middleware(RequestLoggingMiddleware)
 
-# Include API router
-app.include_router(api_router, prefix="/api/v1")
+# Include auth router at root level (no prefix)
+app.include_router(auth.router, tags=["auth"])
 
 
 @app.get("/")

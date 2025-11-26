@@ -29,11 +29,14 @@ services:
       PROJECT_NAME: Transaction Tracking API
       VERSION: 0.1.0
       DEBUG: "True"
-      ALLOWED_ORIGINS: http://localhost:3000,http://localhost:8000
+      ALLOWED_ORIGINS: '["http://localhost:3000", "http://localhost:8000"]'
       LOG_MAX_FILES: "5"
       LOG_MAX_SIZE_MB: "5"
-      LOG_EXCLUDED_PATHS: /health,/docs,/redoc,/openapi.json
+      LOG_EXCLUDED_PATHS: '["/health", "/docs", "/redoc", "/openapi.json"]'
       LOG_LEVEL: INFO
+      JWT_SECRET_KEY: "your-secret-key-change-this"
+      JWT_ALGORITHM: "HS256"
+      JWT_EXPIRY_MINUTES: "10080"
     ports:
       - "8000:8000"
     volumes:
